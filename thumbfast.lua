@@ -113,7 +113,7 @@ end
 
 local spawned = false
 local network = false
-local udisabled = mp.get_property("user-data/thumbfast/disabled", false) == "true"
+local is_stream = false
 local disabled = false
 local spawn_waiting = false
 
@@ -324,11 +324,10 @@ local function info(w, h)
     local display_w, display_h = w, h
     local rotate = mp.get_property_number("video-params/rotate")
 
-    network = mp.get_property_bool("demuxer-via-network", false)
+    network = mp.get_property_bool("demuxer-via-network", false) or is_stream
     local image = mp.get_property_native("current-tracks/video/image", false)
     local albumart = image and mp.get_property_native("current-tracks/video/albumart", false)
-    disabled = udisabled or
-        (w or 0) == 0 or (h or 0) == 0 or
+    disabled = (w or 0) == 0 or (h or 0) == 0 or
         has_vid == 0 or
         (network and not options.network) or
         (albumart and not options.audio) or
@@ -710,12 +709,15 @@ mp.observe_property("edition", "native", sync_changes)
 mp.register_script_message("thumb", thumb)
 mp.register_script_message("clear", clear)
 
-mp.observe_property("user-data/thumbfast/disabled", "string", function (prop, val)
-    if val ~= nil then
-        udisabled = val == "true"
-        info(effective_w, effective_h)
-        mp.msg.verbose("Thumbfast disabled state changed, disabled = " .. tostring(disabled))
+mp.observe_property('demuxer-cache-state', 'native', function(prop, cache_state)
+    local cached_ranges = nil
+    if cache_state then
+        cached_ranges = cache_state['seekable-ranges']
+    else cached_ranges = {} end
+    if #cached_ranges > 0 then
+        is_stream = true
     end
+    info(effective_w, effective_h)
 end)
 
 mp.register_event("file-loaded", file_load)

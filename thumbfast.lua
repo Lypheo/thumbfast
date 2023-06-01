@@ -22,8 +22,8 @@ local options = {
     -- Spawn thumbnailer on file load for faster initial thumbnails
     spawn_first = false,
 
-    -- Enable on network playback
-    network = false,
+    -- Enable on network playback outside of cache ranges
+    network = true,
 
     -- Enable on audio playback
     audio = false,
@@ -32,7 +32,7 @@ local options = {
     hwdec = false,
 
     -- Windows only: use native Windows API to write to pipe (requires LuaJIT)
-    direct_io = false
+    direct_io = true
 }
 
 mp.utils = require "mp.utils"
@@ -113,7 +113,7 @@ end
 
 local spawned = false
 local network = false
-local is_stream = false
+local cached_ranges = {}
 local disabled = false
 local spawn_waiting = false
 
@@ -323,13 +323,10 @@ local info_timer = nil
 local function info(w, h)
     local display_w, display_h = w, h
     local rotate = mp.get_property_number("video-params/rotate")
-
-    network = mp.get_property_bool("demuxer-via-network", false) or is_stream
     local image = mp.get_property_native("current-tracks/video/image", false)
     local albumart = image and mp.get_property_native("current-tracks/video/albumart", false)
     disabled = (w or 0) == 0 or (h or 0) == 0 or
         has_vid == 0 or
-        (network and not options.network) or
         (albumart and not options.audio) or
         (image and not albumart)
 
@@ -557,11 +554,21 @@ file_timer = mp.add_periodic_timer(file_check_period, function()
 end)
 file_timer:kill()
 
-local function thumb(time, r_x, r_y, script)
-    if disabled then return end
+local function in_cache(time) 
+    for _, range in ipairs(cached_ranges) do
+        if time >= range[1] and time <= range[2] then
+            return true
+        end
+    end
+    return false
+end
 
+local function thumb(time, r_x, r_y, script)
     time = tonumber(time)
     if time == nil then return end
+    local cached = in_cache(time)
+    -- mp.commandv("script-message-to", "simple", "thumb", time, r_x, r_y)
+    if disabled or (network and not cached and not options.network) then return end
 
     if r_x == "" or r_y == "" then
         x, y = nil, nil
@@ -574,17 +581,25 @@ local function thumb(time, r_x, r_y, script)
         show_thumbnail = true
         last_x = x
         last_y = y
-        draw(real_w, real_h, script)
+        if cached then
+            mp.command_native_async({"thumb", options.overlay_id, time, x, y, effective_w, effective_h})
+        else
+            draw(real_w, real_h, script)
+        end
     end
 
     if time == last_seek_time then return end
     last_seek_time = time
-    if not spawned then spawn(time) end
-    request_seek()
-    if not file_timer:is_enabled() then file_timer:resume() end
+
+    if not cached and (not network or options.network) then
+        if not spawned then spawn(time) end
+        request_seek()
+        if not file_timer:is_enabled() then file_timer:resume() end
+    end
 end
 
 local function clear()
+    mp.commandv("script-message-to", "simple", "clear")
     file_timer:kill()
     seek_timer:kill()
     last_seek = 0
@@ -710,14 +725,24 @@ mp.register_script_message("thumb", thumb)
 mp.register_script_message("clear", clear)
 
 mp.observe_property('demuxer-cache-state', 'native', function(prop, cache_state)
-    local cached_ranges = nil
+    local _cached_ranges, bof, eof = nil, nil, nil
     if cache_state then
-        cached_ranges = cache_state['seekable-ranges']
-    else cached_ranges = {} end
-    if #cached_ranges > 0 then
-        is_stream = true
+        _cached_ranges, bof, eof = cache_state['seekable-ranges'], cache_state['bof-cached'], cache_state['eof-cached']
+    else _cached_ranges = {} end
+
+    local ranges, duration = {}, mp.get_property_number("duration", 9999999)
+    for _, range in ipairs(_cached_ranges) do
+        ranges[#ranges + 1] = {
+            math.max(range['start'] or 0, 0),
+            math.min(range['end'] or duration, duration),
+        }
     end
-    info(effective_w, effective_h)
+    table.sort(ranges, function(a, b) return a[1] < b[1] end)
+    if bof then ranges[1][1] = 0 end
+    if eof then ranges[#ranges][2] = duration end
+
+    network = mp.get_property_bool("demuxer-via-network", false) or #ranges > 0
+    cached_ranges = ranges
 end)
 
 mp.register_event("file-loaded", file_load)

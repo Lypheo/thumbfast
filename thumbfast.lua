@@ -23,7 +23,7 @@ local options = {
     spawn_first = false,
 
     -- Enable on network playback outside of cache ranges
-    network = true,
+    network = false,
 
     -- Enable on audio playback
     audio = false,
@@ -563,21 +563,34 @@ local function in_cache(time)
     return false
 end
 
+local function clear()
+    -- mp.commandv("script-message-to", "simple", "clear")
+    file_timer:kill()
+    seek_timer:kill()
+    last_seek = 0
+    show_thumbnail = false
+    last_x = nil
+    last_y = nil
+    if script_name then return end
+    mp.command_native({"overlay-remove", options.overlay_id})
+end
+
 local function thumb(time, r_x, r_y, script)
     time = tonumber(time)
     if time == nil then return end
     local cached = in_cache(time)
-    -- mp.commandv("script-message-to", "simple", "thumb", time, r_x, r_y)
-    if disabled or (network and not cached and not options.network) then return end
+    if disabled or (network and not cached and not options.network) then
+        clear()
+        return
+    end
 
     if r_x == "" or r_y == "" then
         x, y = nil, nil
     else
         x, y = math.floor(r_x + 0.5), math.floor(r_y + 0.5)
     end
-
     script_name = script
-    if last_x ~= x or last_y ~= y or not show_thumbnail then
+    if last_x ~= x or last_y ~= y or not show_thumbnail or time ~= last_seek_time then
         show_thumbnail = true
         last_x = x
         last_y = y
@@ -596,18 +609,6 @@ local function thumb(time, r_x, r_y, script)
         request_seek()
         if not file_timer:is_enabled() then file_timer:resume() end
     end
-end
-
-local function clear()
-    mp.commandv("script-message-to", "simple", "clear")
-    file_timer:kill()
-    seek_timer:kill()
-    last_seek = 0
-    show_thumbnail = false
-    last_x = nil
-    last_y = nil
-    if script_name then return end
-    mp.command_native({"overlay-remove", options.overlay_id})
 end
 
 local function watch_changes()

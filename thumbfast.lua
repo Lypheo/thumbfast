@@ -567,6 +567,7 @@ local function clear()
     -- mp.commandv("script-message-to", "simple", "clear")
     file_timer:kill()
     seek_timer:kill()
+    cache_thumb_timer:kill()    
     last_seek = 0
     show_thumbnail = false
     last_x = nil
@@ -575,7 +576,17 @@ local function clear()
     mp.command_native({"overlay-remove", options.overlay_id})
 end
 
+curr_pars = {_x = nil, _y = nil, _time = nil}
+cache_thumb_timer = mp.add_periodic_timer(0.2, function ()
+    local vc = mp.get_property("video-codec")
+    local hard = vc:find("hevc") or vc:find("av1") or vc:find("vp9")
+    cache_thumb_timer.timeout = 0.2 * (hard and 2.5 or 1)
+    mp.command_native_async({"thumb", options.overlay_id, curr_pars._time, curr_pars._x, curr_pars._y, effective_w, effective_h})
+end)
+cache_thumb_timer:kill()
+
 local function thumb(time, r_x, r_y, script)
+    print(time, os.clock())
     time = tonumber(time)
     if time == nil then return end
     local cached = in_cache(time)
@@ -595,12 +606,17 @@ local function thumb(time, r_x, r_y, script)
         last_x = x
         last_y = y
         if cached then
-            mp.command_native_async({"thumb", options.overlay_id, time, x, y, effective_w, effective_h})
+            curr_pars = {_x = x, _y = y, _time = time}
+            if not cache_thumb_timer:is_enabled() then
+                mp.command_native_async({"thumb", options.overlay_id, time, x, y, effective_w, effective_h})
+                cache_thumb_timer:resume()
+            else 
+                mp.command_native_async({"thumb", options.overlay_id, -1, x, y, effective_w, effective_h})
+            end
         else
             draw(real_w, real_h, script)
         end
     end
-
     if time == last_seek_time then return end
     last_seek_time = time
 
